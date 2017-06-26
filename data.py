@@ -1,6 +1,5 @@
 #This code parses the elements in the OSM XML file, transforms them from document format to
 #tabular format, then writes them as .csv files.
-#Program name data.py
 # The steps are:
 # 1. Iteratively parse each top level element in the XML creating an iterparse Element object
 # 2. Shape each iterparse Element object and return a dictionary for each top level tag & for each secondary tag using
@@ -11,6 +10,8 @@ import pprint
 import re
 import xml.etree.cElementTree as ET
 import schema
+import string
+from audit import update_name, is_street_name, update_city_name, is_city_name
 
 import csv
 import codecs
@@ -25,6 +26,8 @@ WAY_TAGS_PATH = "ways_tags.csv"
 
 LOWER_COLON = re.compile(r'^([a-z]|_)+:([a-z]|_)+')
 PROBLEMCHARS = re.compile(r'[=\+/&<>;\'"\?%#$@\,\. \t\r\n]')
+street_type_re = re.compile('([\w\s,+)([\s(\w]+)', re.IGNORECASE)
+city_name_re = re.compile('([\w\s,+)([\s(\w]+)')
 
 SCHEMA = schema.schema
 
@@ -34,6 +37,21 @@ NODE_TAGS_FIELDS = ['id', 'key', 'value', 'type']
 WAY_FIELDS = ['id', 'user', 'uid', 'version', 'changeset', 'timestamp']
 WAY_TAGS_FIELDS = ['id', 'key', 'value', 'type']
 WAY_NODES_FIELDS = ['id', 'node_id', 'position']
+
+expected = ["Street", "Avenue", "Boulevard", "Drive", "Court", "Place", "Square", "Lane", "Road", 
+            "Trail", "Parkway", "Commons"]
+
+mapping = { "St ": "Street",
+            "St.": "Street",
+            "Ave ": "Avenue",
+            "Rd.": "Road"
+            }
+
+expected_cities = ["Irvine", "Santa Ana", "Newport Beach", "Tustin", "Lake Forest", "Costa Mesa", "Fountain Valley"]
+
+city_mapping = { "Tustin, CA": "Tustin",
+                "irvine": "Irvine"
+                }
 
 # Populate a secondary tag dictionary with new values for node_tags and way_tags
 def pop_new_tag_value(element, secondary, default_tag_type):
@@ -46,8 +64,25 @@ def pop_new_tag_value(element, secondary, default_tag_type):
         post_colon = secondary.attrib['k'].index(":") + 1
         new['key'] = secondary.attrib['k'][post_colon:]
         new['type'] = secondary.attrib['k'][:post_colon - 1]
-    new['value'] = secondary.attrib['v']
-    print secondary.attrib['v']
+    
+ # Cleaning and loading values of various keys
+
+    if is_street_name(secondary):
+        street_name = secondary.attrib['v']
+        street_name = update_name(street_name, mapping)
+        new['value'] = street_name
+        print street_name
+        
+    elif is_city_name(secondary):
+        city_name = secondary.attrib['v']
+        city_name = update_city_name(city_name, mapping)
+        new['value'] = city_name
+        print city_name
+    
+    else:
+        new['value'] = secondary.attrib['v']
+        print secondary.attrib['v']
+    
     return new
     
 def shape_element(element, node_attr_fields=NODE_FIELDS, way_attr_fields=WAY_FIELDS,
@@ -71,7 +106,8 @@ def shape_element(element, node_attr_fields=NODE_FIELDS, way_attr_fields=WAY_FIE
                     continue
                 else:
                     new = pop_new_tag_value(element, secondary, default_tag_type)
-                    tags.append(new)
+                    if new is not None:
+                        tags.append(new)
         return {'node': node_attribs, 'node_tags': tags}
     elif element.tag == 'way':
         for attrib, value in element.attrib.iteritems():
@@ -85,7 +121,8 @@ def shape_element(element, node_attr_fields=NODE_FIELDS, way_attr_fields=WAY_FIE
                     continue
                 else:
                     new = pop_new_tag_value(element, secondary, default_tag_type)
-                    tags.append(new)
+                    if new is not None:
+                        tags.append(new)
             if secondary.tag == 'nd':
                 newnd = {}
                 newnd['id'] = element.attrib['id']
@@ -117,7 +154,7 @@ def validate_element(element, validator, schema=SCHEMA):
         field, errors = next(validator.errors.iteritems())
         message_string = "\nElement of type '{0}' has the following errors:\n{1}"
         error_string = pprint.pformat(errors)
-        
+
         raise Exception(message_string.format(field, error_string))
 
 class UnicodeDictWriter(csv.DictWriter, object):
